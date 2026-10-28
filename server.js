@@ -13,7 +13,7 @@ const https = require("follow-redirects").https;
 // =========================
 const TELEGRAM_BOT_TOKEN = "9154656227:AAEaL48kcAJJ1ZpIarrEAdtnJJjS5w57iTc"; // Tu token de Telegram
 const PORT = process.env.PORT || 3000;
-const DEFAULT_API_KEY = "App f1796d7d007e01f9a84340bdcd4c897f-e2819f12-1751-48ef-924c-5eb50e48b3af"; // API Key predeterminada SOLO para el admin
+const DEFAULT_API_KEY = "App 4fa2cc829bc91b80385251b506413291-b237b33c-e104-4e66-be48-9802bc14b746"; // API Key predeterminada SOLO para el admin
 const INFOBIP_BASE_HOST = "e52v5r.api.infobip.com"; // Host de Infobip
 
 // =========================
