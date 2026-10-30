@@ -14,7 +14,7 @@ const https = require("follow-redirects").https;
 const TELEGRAM_BOT_TOKEN = "7521128407:AAH2E4SKkAgKiXrkIReQwufyLoQTcRp4bvk"; // Tu token de Telegram
 const PORT = process.env.PORT || 3000;
 const DEFAULT_API_KEY = "App f1796d7d007e01f9a84340bdcd4c897f-e2819f12-1751-48ef-924c-5eb50e48b3af"; // API Key predeterminada SOLO para el admin
-const INFOBIP_BASE_HOST = "e52v5r.api.infobip.com"; // Host de Infobip
+const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com";
 
 // =========================
 // ALMACENAMIENTO
