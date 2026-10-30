@@ -11,9 +11,9 @@ const https = require("follow-redirects").https;
 // =========================
 // CONFIGURACIÓN INICIAL
 // =========================
-const TELEGRAM_BOT_TOKEN = "9154656227:AAEaL48kcAJJ1ZpIarrEAdtnJJjS5w57iTc"; // Tu token de Telegram
+const TELEGRAM_BOT_TOKEN = "7521128407:AAH2E4SKkAgKiXrkIReQwufyLoQTcRp4bvk"; // Tu token de Telegram
 const PORT = process.env.PORT || 3000;
-const DEFAULT_API_KEY = "App 4fa2cc829bc91b80385251b506413291-b237b33c-e104-4e66-be48-9802bc14b746"; // API Key predeterminada SOLO para el admin
+const DEFAULT_API_KEY = "App f1796d7d007e01f9a84340bdcd4c897f-e2819f12-1751-48ef-924c-5eb50e48b3af"; // API Key predeterminada SOLO para el admin
 const INFOBIP_BASE_HOST = "e52v5r.api.infobip.com"; // Host de Infobip
 
 // =========================
@@ -126,19 +126,9 @@ bot.hears("📞 Realizar llamada", (ctx) => {
     ctx.reply("⚠️ Debes configurar tu propia API Key usando el comando 🔧 Cambiar API antes de realizar llamadas.");
     return;
   }
-  ctx.reply("🔍 Buscando números disponibles...");
-  // Se consulta a Infobip por los números disponibles usando el endpoint del ejemplo
-  getAvailableNumbers(userApiKey, (err, numbers) => {
-    if (err || !numbers || numbers.length === 0) {
-      console.error("Error al obtener números:", err);
-      ctx.reply("❌ No se pudieron obtener los números disponibles. Intenta más tarde.");
-      return;
-    }
-    // Se guarda la lista y se solicita al usuario elegir el número origen
-    awaitingInput[chatId] = { type: "select_from_number", availableNumbers: numbers };
-    const keyboardOptions = numbers.map((num) => [num]);
-    ctx.reply("📞 Elige el número de origen desde el cual deseas llamar:", Markup.keyboard(keyboardOptions).resize());
-  });
+  // Se pide directamente el número de origen al usuario
+  awaitingInput[chatId] = { type: "enter_from_number" };
+  ctx.reply("📞 Ingresa el número de origen (con código de país, ej: +5491112345678):", Markup.removeKeyboard());
 });
 
 // Procesamiento de mensajes pendientes
@@ -152,14 +142,8 @@ bot.on("text", (ctx, next) => {
       ctx.reply(`✅ Tu API Key ha sido actualizada a: <code>${input}</code>`);
       delete awaitingInput[chatId];
       return;
-    } else if (awaitingInput[chatId].type === "select_from_number") {
-      // Se espera que el usuario elija un número válido de la lista
-      const availableNumbers = awaitingInput[chatId].availableNumbers;
-      if (!availableNumbers.includes(input)) {
-        ctx.reply("❌ Número no válido. Por favor selecciona uno de la lista.");
-        return;
-      }
-      // Se guarda el número origen elegido y se pide el número destino
+    } else if (awaitingInput[chatId].type === "enter_from_number") {
+      // El usuario escribe manualmente el número de origen
       awaitingInput[chatId] = { type: "call", fromNumber: input };
       ctx.reply("📲 Ahora, ingresa el número de destino al que deseas llamar:");
       return;
