@@ -13,8 +13,8 @@ const https = require("follow-redirects").https;
 // =========================
 const TELEGRAM_BOT_TOKEN = "7521128407:AAH2E4SKkAgKiXrkIReQwufyLoQTcRp4bvk"; // Tu token de Telegram
 const PORT = process.env.PORT || 3000;
-const DEFAULT_API_KEY = "App f1796d7d007e01f9a84340bdcd4c897f-e2819f12-1751-48ef-924c-5eb50e48b3af"; // API Key predeterminada SOLO para el admin
-const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com";
+const DEFAULT_API_KEY = "App e3daefcc80560f5b41fbaea5f57cf55d-37367689-0e5a-47ad-bf35-7f11679eb55d"; // API Key predeterminada SOLO para el admin
+const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com"; // Host de Infobip
 
 // =========================
 // ALMACENAMIENTO
