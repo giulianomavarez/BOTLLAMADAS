@@ -320,8 +320,11 @@ function initiateCall(chatId, targetNumber, fromNumber) {
 function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
   callRequests[scenarioId] = chatId;
 
+  // bulkId único por llamada para evitar filtros anti-flooding
+  const bulkId = "BULK-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
+
   const messagePayload = {
-   bulkId: "BULK-" + Date.now(),
+    bulkId: bulkId,
     messages: [
       {
         scenarioId: scenarioId,
@@ -540,6 +543,26 @@ app.listen(PORT, () => {
   console.log(`Servidor Express escuchando en el puerto ${PORT}`);
 });
 
-bot.launch()
-  .then(() => console.log("Bot de Telegram iniciado."))
-  .catch((err) => console.error("Error al iniciar el bot de Telegram:", err));
+// Lanzar bot con manejo del error 409 (conflicto de instancias)
+function launchBot(retries = 5) {
+  bot.launch()
+    .then(() => console.log("Bot de Telegram iniciado correctamente."))
+    .catch((err) => {
+      if (err.response && err.response.error_code === 409) {
+        if (retries > 0) {
+          const delay = (6 - retries) * 3000; // espera incremental: 3s, 6s, 9s...
+          console.warn(`⚠️ Conflicto 409 (otra instancia activa). Reintentando en ${delay / 1000}s... (${retries} intentos restantes)`);
+          setTimeout(() => launchBot(retries - 1), delay);
+        } else {
+          console.error("❌ No se pudo iniciar el bot después de varios intentos (error 409). El servidor Express sigue activo.");
+        }
+      } else {
+        console.error("❌ Error al iniciar el bot:", err.message);
+      }
+    });
+}
+
+launchBot();
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
