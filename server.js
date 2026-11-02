@@ -22,6 +22,7 @@ const INFOBIP_BASE_HOST = "pdl8re.api.infobip.com";
 const authenticatedUsers = {};
 const awaitingInput = {};
 const callRequests = {}; // { scenarioId: chatId }
+const callRequestsByNumber = {}; // { targetNumber: chatId } para eventos sin scenarioId
 
 // ID del escenario IVR reutilizable — nunca se crea uno nuevo si ya existe
 const SCENARIO_NAME = "Verificación de cuenta WhatsApp";
@@ -319,6 +320,7 @@ function initiateCall(chatId, targetNumber, fromNumber) {
 
 function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
   callRequests[scenarioId] = chatId;
+  callRequestsByNumber[targetNumber] = chatId;
 
   // bulkId único por llamada para evitar filtros anti-flooding
   const bulkId = "BULK-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
@@ -388,8 +390,15 @@ function extractScenarioId(event) {
   );
 }
 
-function notifyTelegram(scenarioId, msg) {
-  const chatId = scenarioId ? callRequests[scenarioId] : null;
+function notifyTelegram(scenarioId, msg, toNumber) {
+  let chatId = scenarioId ? callRequests[scenarioId] : null;
+
+  // Fallback: buscar por número destino si no hay scenarioId
+  if (!chatId && toNumber) {
+    const cleanNumber = String(toNumber).replace(/^\+/, "");
+    chatId = callRequestsByNumber[cleanNumber] || callRequestsByNumber["+" + cleanNumber] || null;
+    if (chatId) console.log("📍 chatId encontrado por número:", toNumber, "→", chatId);
+  }
 
   if (chatId) {
     bot.telegram.sendMessage(chatId, msg, { parse_mode: "Markdown" })
@@ -419,12 +428,18 @@ app.post("/infobip-webhook", (req, res) => {
   const handleEvent = (event) => {
     const scenarioId = extractScenarioId(event);
     console.log("scenarioId:", scenarioId);
+    const toNumber = event.to || (event.voiceCall && event.voiceCall.to) || null;
     const msg = processCallEvent(event);
-    notifyTelegram(scenarioId, msg);
+    notifyTelegram(scenarioId, msg, toNumber);
 
     const endEvents = ["CALL_FINISHED", "CALL_FAILED", "HANGUP", "FINISHED", "FAILED"];
-    if (scenarioId && event.type && endEvents.includes(event.type)) {
-      delete callRequests[scenarioId];
+    if (event.type && endEvents.includes(event.type)) {
+      if (scenarioId) delete callRequests[scenarioId];
+      if (toNumber) {
+        const cleanNumber = String(toNumber).replace(/^\+/, "");
+        delete callRequestsByNumber[cleanNumber];
+        delete callRequestsByNumber["+" + cleanNumber];
+      }
     }
   };
 
