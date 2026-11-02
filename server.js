@@ -321,7 +321,7 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
   callRequests[scenarioId] = chatId;
 
   const messagePayload = {
-    bulkId: "BULK-ID-123-xyz",
+   bulkId: "BULK-" + Date.now(),
     messages: [
       {
         scenarioId: scenarioId,
