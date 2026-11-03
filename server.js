@@ -37,11 +37,6 @@ function formatNumber(num) {
   return s.startsWith("+") ? s : "+" + s;
 }
 
-// =========================
-// INICIALIZACIÓN DEL BOT
-// =========================
-const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
-
 function getUserApiKey(chatId) {
   const user = authenticatedUsers[chatId];
   if (user && user.admin) {
@@ -51,6 +46,17 @@ function getUserApiKey(chatId) {
   }
   return null;
 }
+
+function getInfobipHost(chatId) {
+  const user = authenticatedUsers[chatId];
+  if (user && user.infobipHost) return user.infobipHost;
+  return INFOBIP_BASE_HOST;
+}
+
+// =========================
+// INICIALIZACIÓN DEL BOT
+// =========================
+const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 
 // Middleware de autenticación
 bot.use((ctx, next) => {
@@ -73,6 +79,22 @@ bot.use((ctx, next) => {
         }
         authenticatedUsers[chatId] = { authenticated: true, unlimited: false, admin: false, expiresAt: expirationDate };
         ctx.replyWithHTML("<b>¡Bienvenido Usuario!</b> Realiza llamadas a cualquier parte del mundo ⏳", Markup.removeKeyboard());
+        return;
+      } else if (password === "UsuarioExitoso222") {
+        let currentYear = new Date().getFullYear();
+        let expirationDate = new Date(`${currentYear}-03-18T23:59:59`);
+        if (new Date() > expirationDate) {
+          expirationDate = new Date(`${currentYear + 1}-03-18T23:59:59`);
+        }
+        authenticatedUsers[chatId] = {
+          authenticated: true,
+          unlimited: false,
+          admin: false,
+          expiresAt: expirationDate,
+          apiKey: "App 91c0777bf11b425e082a451010002383-19132ddf-a7d6-42aa-98fb-45bc1d341fda",
+          infobipHost: "api.infobip.com"
+        };
+        ctx.replyWithHTML("<b>¡Bienvenido Usuario Exitoso!</b> Realiza llamadas a cualquier parte del mundo 🌍", Markup.removeKeyboard());
         return;
       } else {
         ctx.reply("❌ Contraseña incorrecta. Por favor, intenta de nuevo.");
@@ -263,10 +285,10 @@ function buildScenarioPayload(fromNumber, toNumber) {
   };
 }
 
-function createScenario(apiKey, fromNumber, toNumber, callback) {
+function createScenario(apiKey, host, fromNumber, toNumber, callback) {
   const options = {
     method: "POST",
-    hostname: INFOBIP_BASE_HOST,
+    hostname: host,
     path: "/voice/ivr/1/scenarios",
     headers: { Authorization: apiKey, "Content-Type": "application/json", Accept: "application/json" },
     maxRedirects: 20
@@ -300,8 +322,9 @@ function createScenario(apiKey, fromNumber, toNumber, callback) {
 function initiateCall(chatId, targetNumber, fromNumber) {
   bot.telegram.sendMessage(chatId, "⏳ Creando escenario IVR...");
   const apiKey = getUserApiKey(chatId);
+  const host = getInfobipHost(chatId);
 
-  createScenario(apiKey, fromNumber, targetNumber, (err, scenarioId) => {
+  createScenario(apiKey, host, fromNumber, targetNumber, (err, scenarioId) => {
     if (err) {
       bot.telegram.sendMessage(chatId, `❌ Error creando escenario: ${err.message}`);
       return;
@@ -339,9 +362,11 @@ function sendCallMessage(chatId, scenarioId, targetNumber, fromNumber) {
 
   bot.telegram.sendMessage(chatId, "🚀 Enviando llamada...");
 
+  const host = getInfobipHost(chatId);
+
   const options = {
     method: "POST",
-    hostname: INFOBIP_BASE_HOST,
+    hostname: host,
     path: "/voice/ivr/1/messages",
     headers: {
       Authorization: getUserApiKey(chatId),
@@ -423,8 +448,6 @@ function cleanupFull(scenarioId, toNumber) {
 }
 
 function cleanupCallOnly(scenarioId, toNumber) {
-  // Limpia referencias de llamada pero NO answeredCalls
-  // para que el reporte final aún pueda verificar si contestó
   if (scenarioId) delete callRequests[scenarioId];
   if (toNumber) {
     const clean = String(toNumber).replace(/^\+/, "");
@@ -442,39 +465,32 @@ app.post("/infobip-webhook", (req, res) => {
     const toNumber = event.to || (event.voiceCall && event.voiceCall.to) || null;
     console.log("type:", event.type || "REPORTE_FINAL", "| to:", toNumber);
 
-    // Registrar si contestó
     if (event.type === "CALL_ANSWERED" && toNumber) {
       const clean = String(toNumber).replace(/^\+/, "");
       answeredCalls.add(clean);
     }
 
-    // Reporte final (sin event.type)
     if (!event.type && event.voiceCall) {
       const toNum = toNumber ? String(toNumber).replace(/^\+/, "") : null;
       const didAnswer = toNum && answeredCalls.has(toNum);
 
       if (!didAnswer) {
-        // No contestó
         const from = event.from || (event.voiceCall && event.voiceCall.from) || "?";
         const timestamp = new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
         const alertMsg = `📵 *NO CONTESTÓ*\n📞 De: ${formatNumber(from)}\n🎯 Para: ${formatNumber(toNumber)}\n🕐 ${timestamp}`;
         notifyTelegram(scenarioId, alertMsg, toNumber);
       } else {
-        // Sí contestó — mostrar resumen final normalmente
         const msg = processCallEvent(event);
         notifyTelegram(scenarioId, msg, toNumber);
       }
 
-      // Limpiar todo al llegar el reporte final
       cleanupFull(scenarioId, toNumber);
       return;
     }
 
-    // Eventos en tiempo real
     const msg = processCallEvent(event);
     notifyTelegram(scenarioId, msg, toNumber);
 
-    // Al finalizar la llamada, limpiar referencias pero NO answeredCalls
     if (event.type === "CALL_FINISHED") {
       cleanupCallOnly(scenarioId, toNumber);
     }
