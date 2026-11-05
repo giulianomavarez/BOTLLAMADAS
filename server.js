@@ -161,7 +161,7 @@ function notifyEvent(type, from, to, extra = {}) {
 }
 
 function buildIVRScript(steps, fromNumber, toNumber) {
-  const vo = { language: "es", gender: "female" };
+  const vo = { language: "es" };
   const script = [notifyEvent("CALL_ANSWERED", fromNumber, toNumber)];
 
   function processSteps(stepList) {
